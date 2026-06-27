@@ -35,6 +35,11 @@ static const uint16_t TCP_PORT = 2000;
 // Listen-only = pure sniffer, never disturbs the boat's bus. Switch to
 // TWAI_MODE_NORMAL when you add transmit (autopilot control — see TODO below).
 #define TWAI_MODE   TWAI_MODE_LISTEN_ONLY
+
+// First bring-up aid: when 1, dump EVERY received CAN frame (hex) to Serial,
+// even PGNs we don't decode. Lets you confirm the bus + wiring are alive before
+// worrying about decoding. Set to 0 once everything works to reduce noise.
+#define DEBUG_RAW   1
 // ===========================================================================
 
 static const int MAX_CLIENTS = 4;
@@ -122,6 +127,16 @@ void loop() {
   fr.id  = msg.identifier;
   fr.len = msg.data_length_code > 8 ? 8 : msg.data_length_code;
   for (uint8_t i = 0; i < fr.len; i++) fr.data[i] = msg.data[i];
+
+#if DEBUG_RAW
+  {
+    n2k::Header h = n2k::parseHeader(fr.id);
+    Serial.printf("RAW id=%08X pgn=%-6lu src=%-3u len=%u data=",
+                  fr.id, (unsigned long)h.pgn, h.src, fr.len);
+    for (uint8_t i = 0; i < fr.len; i++) Serial.printf("%02X ", fr.data[i]);
+    Serial.println();
+  }
+#endif
 
   std::string json = n2k::toJson(fr);
   if (json.empty()) return;        // unhandled PGN
