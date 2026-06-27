@@ -1,0 +1,11 @@
+# --- secrets (NEVER commit) ---
+seatalk_gateway/secrets.h
+
+# --- build artifacts ---
+test/test_decoder
+sim/sim_server
+*.o
+*.out
+
+# --- macOS ---
+.DS_Store

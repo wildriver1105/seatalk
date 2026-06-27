@@ -18,12 +18,14 @@
 // Board: "ESP32 Dev Module" (or your variant). Open this folder in Arduino IDE.
 
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include "driver/twai.h"
 #include "n2k_decoder.h"
+#include "secrets.h"   // WIFI_SSID / WIFI_PASS — gitignored, see secrets.h.example
 
 // ===== user config =========================================================
-static const char* WIFI_SSID = "YOUR_WIFI_SSID";
-static const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+// WiFi credentials live in secrets.h (not committed to git).
+static const char* MDNS_NAME = "seatalk";              // -> reach it as seatalk.local
 static const uint16_t TCP_PORT = 2000;
 
 // adjust to your wiring
@@ -52,8 +54,15 @@ static void wifiConnect() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("WiFi: connected. IP = ");
     Serial.println(WiFi.localIP());
-    Serial.printf("TCP: connect your PC to %s:%u\n",
-                  WiFi.localIP().toString().c_str(), TCP_PORT);
+    // mDNS: reach the gateway by name, no need to chase the DHCP IP.
+    if (MDNS.begin(MDNS_NAME)) {
+      MDNS.addService("n2k", "tcp", TCP_PORT);
+      Serial.printf("TCP: connect your PC to %s.local:%u  (or %s:%u)\n",
+                    MDNS_NAME, TCP_PORT, WiFi.localIP().toString().c_str(), TCP_PORT);
+    } else {
+      Serial.printf("TCP: connect your PC to %s:%u\n",
+                    WiFi.localIP().toString().c_str(), TCP_PORT);
+    }
   } else {
     Serial.println("WiFi: FAILED (continuing on USB serial only).");
   }

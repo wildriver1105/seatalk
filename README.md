@@ -71,8 +71,17 @@ python3 tools/n2k_client.py localhost 2000        # 라이브 계기판
    #define CAN_RX_GPIO GPIO_NUM_4
    ```
 4. 업로드 후 Serial Monitor를 **115200 baud**로 연다. 부팅 시 WiFi IP가 출력된다.
-5. PC에서 그 IP로 접속: `python3 tools/n2k_client.py <ESP32_IP> 2000`
-   (OpenCPN/Signal K도 TCP, host=ESP32 IP, port=2000으로 바로 연결 가능.)
+5. PC에서 **이름으로** 접속 (mDNS, macOS는 Bonjour로 기본 지원):
+   ```
+   python3 tools/n2k_client.py seatalk.local 2000
+   ```
+   IP를 직접 써도 된다: `python3 tools/n2k_client.py <ESP32_IP> 2000`
+   (OpenCPN/Signal K도 TCP, host=`seatalk.local` 또는 IP, port=2000으로 연결.)
+
+### WiFi 모드: STA (권장)
+ESP32가 **스타링크 WiFi에 접속(STA)**한다. 컴퓨터는 스타링크에 그대로 붙어 있어 **인터넷을
+유지**하면서 같은 LAN의 ESP32로 데이터를 받는다. ESP32를 핫스팟(AP)으로 만들면 컴퓨터가
+ESP32 WiFi로 갈아타야 해서 인터넷이 끊기므로, 인터넷이 필요하면 STA가 맞다.
 
 ### 배선 (ESP32 ↔ SN65HVD230 / TJA1050)
 | ESP32        | 트랜시버         |
