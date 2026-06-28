@@ -26,21 +26,101 @@ JSON 형식(줄 단위, 예):
 **ESP32와 호스트 시뮬레이터의 JSON 형식은 완전히 동일하다.** 시뮬레이터로 개발한 PC
 소프트웨어는 나중에 IP만 ESP32로 바꾸면 그대로 동작한다.
 
+## 프로젝트 현황
+
+### ✅ 구현 + 검증 완료
+- **공용 디코더 `n2k_decoder`** — Arduino 비종속 순수 C++. PGN 5종 디코딩 + JSON 출력.
+- **호스트 테스트 `test/`** — 시뮬레이션 프레임으로 헤더 파싱 + 디코딩 검증, **19개 전부 통과**.
+- **호스트 시뮬레이터 `sim/sim_server`** — ESP32와 동일한 JSON을 TCP로 송출. Mac에서 동작 확인.
+- **PC 클라이언트 `tools/n2k_client.py`** — 라이브 계기판(HDG/STW/WIND/DEPTH/POS). Mac에서 확인.
+- **ESP32 펌웨어 `seatalk_gateway.ino`**
+  - TWAI(CAN) 250 kbit/s **listen-only** 수신
+  - WiFi **STA** 접속 + **mDNS**(`seatalk.local`) 등록
+  - **TCP 서버 :2000** (다중 클라이언트), **USB 시리얼 + WiFi 동시 출력**
+  - `DEBUG_RAW` — 미디코딩 PGN 포함 모든 프레임 hex 덤프 (배선 점검용)
+- **secrets.h 분리** — WiFi 비밀번호를 gitignore된 파일로 분리(GitHub 안전).
+- **실기(實機) 검증** — ESP32 업로드 성공, WiFi 접속(IP `192.168.1.93`),
+  `seatalk.local` 이름해석 + TCP 2000 연결 **Mac에서 성공**. 무선 데이터 경로 확보.
+
+### 🔲 준비해야 하는 것 (다음 단계)
+- **NMEA2000 버스 물리 연결** — 아직 미연결. 데이터를 받으려면 이게 마지막 관문:
+  - CANH→**흰색**, CANL→**파랑**, V−(검정)→ESP32 GND 공통접지, **V+(빨강) 연결 금지**
+  - 트랜시버 전원 **3.3V**, CAN 핀 GPIO4(RX)/GPIO5(TX) 확인
+  - **데이터가 안 나오면 TX↔RX 스왑부터** (모듈 라벨 관례 차이, 1순위 원인)
+  - 종단저항 120Ω은 백본 양 끝에 이미 있어야 함(기존 배 네트워크면 보통 존재)
+- **버스 연결 후 RAW 덤프 확인** → 실제로 송신 중인 PGN 파악 → 필요한 PGN 디코더 추가.
+
+### 🗺️ 로드맵 (소프트웨어)
+- **Fast-Packet 재조립** — 8바이트 초과 PGN(129029 GNSS, AIS, 126996 제품정보 등).
+- **PGN 추가** — 127245 Rudder, 127257 Attitude, 127251 ROT, 130310/130311 Environmental 등.
+- **출력 연동** — NMEA0183 / **Signal K** 출력 옵션 (OpenCPN·Signal K 생태계 연결).
+- **로깅/표시** — 클라이언트 `--log` 파일 저장, 계기 화면 앱.
+- **중장기: 양방향 제어(오토파일럿)** — `TWAI_MODE_NORMAL` 전환 + TCP 명령 수신 +
+  인코더(`encodeXxx → CanFrame`). 실선 송신 전 **시뮬레이터로 TX round-trip 검증**.
+
+## 설계도 (아키텍처)
+
+### 계층 구조 — 단일 디코더, 호스트와 펌웨어가 공유
+```
+            ┌──────────────────────────────────────────────┐
+            │   n2k_decoder.{h,cpp}  (순수 C++, Arduino 무관)  │
+            │   parseHeader / decode* / toJson / formatLine  │
+            └──────────────┬─────────────────┬───────────────┘
+                           │ 같은 소스 공유      │
+              ┌────────────┴──────┐   ┌────────┴─────────────┐
+              │  HOST (Mac, g++)   │   │  ESP32 (Arduino)      │
+              │  test_decoder      │   │  seatalk_gateway.ino  │
+              │  sim_server        │   │  TWAI + WiFi + TCP     │
+              └───────────────────┘   └──────────────────────┘
+   → 호스트에서 통과한 디코딩 로직 = 펌웨어 로직 (코드 중복 0)
+```
+
+### 런타임 데이터 흐름 (실제 동작 시)
+```
+ [계기들]              [게이트웨이: ESP32-WROOM]                 [PC / 앱]
+ 풍향계·측심기  ─NMEA2000─▶ SN65HVD230 ─▶ TWAI ─▶ n2k_decoder ─▶ JSON
+ GPS·풍속계      (CAN 250k)  (트랜시버)   (CAN수신)  (디코딩)        │
+                                                                 ├▶ USB 시리얼 (유선)
+                                                                 └▶ WiFi TCP :2000
+                                                                    (seatalk.local)
+                                                                        │
+                                                          스타링크 LAN ──┘─▶ nc / python /
+                                                                              OpenCPN / Signal K
+```
+
+### 개발 흐름 — 실물 없이 PC측을 먼저 (검증 완료)
+```
+ sim_server (Mac) ─JSON/TCP:2000─▶ n2k_client.py / 내 앱
+        ▲                                  │
+   같은 JSON 형식                     실물 준비되면 host만
+        ▼                            localhost → seatalk.local 로 교체
+ seatalk_gateway (ESP32) ─JSON/TCP:2000─▶ (동일 클라이언트, 무수정)
+```
+
+### 양방향 제어 확장 자리 (중장기, 미구현)
+```
+ PC ─명령(JSON)─▶ TCP :2000 ─▶ [파싱] ─▶ encodeXxx ─▶ TWAI(NORMAL) ─▶ CAN ─▶ 오토파일럿
+                                        └ 시뮬레이터로 송신 프레임 round-trip 검증 후 실선 적용
+```
+
 ## 구조
 ```
 seatalk/
-├── seatalk_gateway/          # Arduino IDE에서 이 폴더를 연다
-│   ├── seatalk_gateway.ino   # ESP32 TWAI 리스너 + WiFi TCP 서버
-│   ├── n2k_decoder.h         # 디코더 인터페이스 (호스트/ESP32 공용)
-│   └── n2k_decoder.cpp       # 디코더 + JSON 출력 (Arduino 비종속)
+├── seatalk_gateway/             # Arduino IDE에서 이 폴더를 연다
+│   ├── seatalk_gateway.ino      # ESP32: TWAI 수신 + WiFi(STA)+mDNS + TCP 서버
+│   ├── n2k_decoder.h            # 디코더 인터페이스 (호스트/ESP32 공용)
+│   ├── n2k_decoder.cpp          # 디코더 + JSON 출력 (Arduino 비종속)
+│   ├── secrets.h                # WiFi 자격증명 (gitignore됨, 커밋 안 됨)
+│   └── secrets.h.example        # secrets.h 템플릿 (커밋됨)
 ├── sim/
-│   ├── sim_server.cpp        # 호스트 시뮬레이터: ESP32와 동일한 JSON을 TCP로 송출
+│   ├── sim_server.cpp           # 호스트 시뮬레이터: ESP32와 동일한 JSON을 TCP로 송출
 │   └── Makefile
 ├── tools/
-│   └── n2k_client.py         # PC측 수신 클라이언트 (개발 출발점)
-└── test/
-    ├── test_decoder.cpp      # 시뮬레이션 프레임 검증 하니스
-    └── Makefile
+│   └── n2k_client.py            # PC측 수신 클라이언트 (개발 출발점)
+├── test/
+│   ├── test_decoder.cpp         # 시뮬레이션 프레임 검증 하니스 (19개 통과)
+│   └── Makefile
+└── .gitignore                   # secrets.h + 빌드 산출물 제외
 ```
 
 ## 1) 디코더 로직 검증 (실제 버스 불필요)
@@ -62,15 +142,17 @@ python3 tools/n2k_client.py localhost 2000        # 라이브 계기판
 
 ## 3) ESP32에 올려 실제 버스 수신
 1. `seatalk_gateway/` 폴더를 Arduino IDE에서 연다.
-2. Board: **ESP32 Dev Module**(또는 사용하는 변형) 선택.
-3. `seatalk_gateway.ino` 상단의 설정을 채운다:
+2. Board: **ESP32 Dev Module**(WROOM 등) + Port: `/dev/cu.usbserial-*` 선택.
+   (보드가 회색이면 Boards Manager에서 `esp32 by Espressif Systems` 설치 먼저.)
+3. WiFi 자격증명을 `secrets.h`에 넣는다 (커밋되지 않음):
    ```c
-   static const char* WIFI_SSID = "YOUR_WIFI_SSID";
-   static const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
-   #define CAN_TX_GPIO GPIO_NUM_5   // 배선에 맞게
-   #define CAN_RX_GPIO GPIO_NUM_4
+   // secrets.h  — secrets.h.example을 복사해서 채운다
+   #define WIFI_SSID "YOUR_WIFI_SSID"
+   #define WIFI_PASS "YOUR_WIFI_PASSWORD"
    ```
+   CAN 핀은 `.ino` 상단에서 배선에 맞춘다 (`CAN_TX_GPIO=5`, `CAN_RX_GPIO=4`).
 4. 업로드 후 Serial Monitor를 **115200 baud**로 연다. 부팅 시 WiFi IP가 출력된다.
+   (로그가 안 보이면 보드의 `EN`/`RST` 버튼을 눌러 재부팅 → 처음부터 출력됨.)
 5. PC에서 **이름으로** 접속 (mDNS, macOS는 Bonjour로 기본 지원):
    ```
    python3 tools/n2k_client.py seatalk.local 2000
@@ -106,10 +188,4 @@ ESP32 WiFi로 갈아타야 해서 인터넷이 끊기므로, 인터넷이 필요
 | 130306  | Wind Data                  | 풍속/풍향/기준 |
 | 129025  | Position, Rapid Update     | lat/lon        |
 
-모두 단일 프레임 PGN이다.
-
-## 다음 단계 (TODO)
-- **Fast-Packet 재조립**: GNSS(129029), AIS, 제품정보(126996) 등 8바이트 초과 PGN.
-- PGN 추가: 127245 Rudder, 127257 Attitude, 130310/130311 Environmental 등.
-- 출력 포맷: 사람이 읽는 형식 외에 NMEA0183/JSON 출력 옵션.
-- 실제 트랜시버로 루프백/버스 테스트 후 핀·타이밍 확정.
+모두 단일 프레임 PGN이다. 추가 예정 PGN은 위의 [프로젝트 현황 → 로드맵](#로드맵-소프트웨어) 참고.
